@@ -2,6 +2,11 @@ import gradio as gr
 from gradio_litmodel3d import LitModel3D
 
 import os
+
+os.environ.setdefault("ATTN_BACKEND", "xformers")
+os.environ.setdefault("SPARSE_ATTN_BACKEND", "xformers")
+os.environ.setdefault("SPCONV_ALGO", "native")
+
 import shutil
 from typing import *
 import torch
@@ -400,4 +405,4 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
 if __name__ == "__main__":
     pipeline = TrellisImageTo3DPipeline.from_pretrained("microsoft/TRELLIS-image-large")
     pipeline.cuda()
-    demo.launch()
+    demo.launch(server_name="127.0.0.1", server_port=7860, share=False)

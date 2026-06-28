@@ -81,7 +81,19 @@
         --kaolin                Install kaolin
         --nvdiffrast            Install nvdiffrast
         --demo                  Install all dependencies for demo
+        --gcp-l4-demo           Install pinned GCP L4 demo environment
     ```
+
+### GCP L4 Demo
+
+Use image `projects/deeplearning-platform-release/global/images/pytorch-2-3-cu121-v20250327-ubuntu-2204-py310`, SSH with `-L 7860:localhost:7860`, then:
+```sh
+cd TRELLIS
+bash setup.sh --gcp-l4-demo
+source ~/trellis-venv/bin/activate
+python app.py
+```
+Open <http://localhost:7860>.
 
 <!-- Pretrained Models -->
 ## 🤖 Pretrained Models

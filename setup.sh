@@ -1,5 +1,5 @@
 # Read Arguments
-TEMP=`getopt -o h --long help,new-env,basic,train,xformers,flash-attn,diffoctreerast,vox2seq,spconv,mipgaussian,kaolin,nvdiffrast,demo -n 'setup.sh' -- "$@"`
+TEMP=`getopt -o h --long help,new-env,basic,train,xformers,flash-attn,diffoctreerast,vox2seq,spconv,mipgaussian,kaolin,nvdiffrast,demo,gcp-l4-demo -n 'setup.sh' -- "$@"`
 
 eval set -- "$TEMP"
 
@@ -18,6 +18,7 @@ MIPGAUSSIAN=false
 KAOLIN=false
 NVDIFFRAST=false
 DEMO=false
+GCP_L4_DEMO=false
 
 if [ "$#" -eq 1 ] ; then
     HELP=true
@@ -38,6 +39,7 @@ while true ; do
         --kaolin) KAOLIN=true ; shift ;;
         --nvdiffrast) NVDIFFRAST=true ; shift ;;
         --demo) DEMO=true ; shift ;;
+        --gcp-l4-demo) GCP_L4_DEMO=true ; shift ;;
         --) shift ; break ;;
         *) ERROR=true ; break ;;
     esac
@@ -64,7 +66,99 @@ if [ "$HELP" = true ] ; then
     echo "  --kaolin                Install kaolin"
     echo "  --nvdiffrast            Install nvdiffrast"
     echo "  --demo                  Install all dependencies for demo"
+    echo "  --gcp-l4-demo           Install pinned GCP L4 demo environment"
     return
+fi
+
+if [ "$GCP_L4_DEMO" = true ] ; then
+    set -euo pipefail
+
+    REPO_DIR="$(pwd)"
+    VENV_DIR="${TRELLIS_VENV_DIR:-$HOME/trellis-venv}"
+    if [ -z "${PYTHON:-}" ]; then
+        if [ -x /opt/python/3.10/bin/python ]; then
+            PYTHON=/opt/python/3.10/bin/python
+        else
+            PYTHON=python3
+        fi
+    fi
+
+    log() { printf '\n\033[1;32m[trellis-gcp]\033[0m %s\n' "$*"; }
+
+    log "Installing OS build deps"
+    sudo apt-get update
+    sudo apt-get install -y python3.10-venv python3.10-dev gcc-11 g++-11 build-essential git wget curl
+
+    log "Checking NVIDIA driver"
+    if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
+        if [ -x /opt/deeplearning/install-driver.sh ]; then
+            sudo /opt/deeplearning/install-driver.sh
+        else
+            echo "NVIDIA driver is not available and /opt/deeplearning/install-driver.sh was not found" >&2
+            exit 1
+        fi
+    fi
+
+    log "Using Python: $PYTHON"
+    log "Creating venv with system torch/CUDA packages"
+    if [ ! -d "$VENV_DIR" ]; then
+        "$PYTHON" -m venv --system-site-packages "$VENV_DIR"
+    fi
+    source "$VENV_DIR/bin/activate"
+    python -m pip install --upgrade pip setuptools wheel packaging ninja
+
+    log "Checking base torch/CUDA"
+    python - <<'PY'
+import torch
+print('torch:', torch.__version__)
+print('cuda:', torch.version.cuda)
+print('cuda_available:', torch.cuda.is_available())
+assert torch.cuda.is_available(), 'CUDA is not available'
+assert torch.__version__.startswith('2.3.0'), f'Expected torch 2.3.0, got {torch.__version__}'
+assert torch.version.cuda == '12.1', f'Expected CUDA 12.1, got {torch.version.cuda}'
+PY
+
+    log "Installing Python deps"
+    python -m pip install -r "$REPO_DIR/requirements-gcp-l4.txt"
+
+    log "Installing xformers and sparse conv"
+    python -m pip install --no-deps xformers==0.0.26.post1 --index-url https://download.pytorch.org/whl/cu121
+    python -m pip install spconv-cu120
+
+    log "Building CUDA rasterizer deps"
+    export CC=gcc-11
+    export CXX=g++-11
+    python -m pip install --no-build-isolation git+https://github.com/NVlabs/nvdiffrast.git
+    python -m pip install --no-build-isolation git+https://github.com/JeffreyXiang/diffoctreerast.git
+
+    log "Initializing submodules and installing kaolin"
+    cd "$REPO_DIR"
+    git submodule update --init --recursive
+    python -m pip install kaolin -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.3.0_cu121.html
+
+    log "Installing mip-splatting gaussian rasterizer"
+    if [ ! -d /tmp/mip-splatting ]; then
+        git clone https://github.com/autonomousvision/mip-splatting.git /tmp/mip-splatting
+    else
+        git -C /tmp/mip-splatting pull --ff-only || true
+    fi
+    python -m pip install --no-build-isolation /tmp/mip-splatting/submodules/diff-gaussian-rasterization/
+
+    log "Verifying imports"
+    python - <<'PY'
+import torch, gradio, gradio_client, transformers, numpy
+import xformers, spconv.pytorch, nvdiffrast.torch, diffoctreerast, kaolin
+from trellis.pipelines import TrellisImageTo3DPipeline
+print('torch', torch.__version__, 'cuda', torch.version.cuda, 'available', torch.cuda.is_available())
+print('numpy', numpy.__version__)
+print('gradio', gradio.__version__)
+print('gradio_client', gradio_client.__version__)
+print('transformers', transformers.__version__)
+print('TRELLIS v1 GCP L4 imports OK')
+PY
+
+    log "Setup complete. Run: source $VENV_DIR/bin/activate && python app.py"
+    exit 0
 fi
 
 if [ "$NEW_ENV" = true ] ; then
